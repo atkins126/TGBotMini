@@ -3,8 +3,8 @@
 interface
 
 uses
-  System.SysUtils, REST.Json, System.Net.HttpClient, REST.JsonReflect,
-  REST.Json.Interceptors, HGM.Common.Download;
+  System.SysUtils, System.Json, REST.Json, System.Net.HttpClient,
+  REST.JsonReflect, REST.Json.Interceptors, HGM.Common.Download, System.Classes;
 
 type
   TtgObject = class
@@ -16,9 +16,11 @@ type
   private
     FChat_id: int64;
     FText: string;
+    FReply_markup: string;
   public
     property ChatId: int64 read FChat_id write FChat_id;
     property Text: string read FText write FText;
+    property ReplyMarkup: string read FReply_markup write FReply_markup;
   end;
 
   TtgUser = class(TtgObject)
@@ -29,6 +31,9 @@ type
     FLast_name: string;
     FLanguage_code: string;
     FUsername: string;
+    FCan_join_groups: Boolean;
+    FCan_read_all_group_messages: Boolean;
+    FSupports_inline_queries: Boolean;
   public
     property FirstName: string read FFirst_name;
     property LastName: string read FLast_name;
@@ -36,6 +41,9 @@ type
     property LanguageCode: string read FLanguage_code;
     property IsBot: Boolean read FIs_bot;
     property Id: int64 read FId;
+    property CanJoinGroups: Boolean read FCan_join_groups write FCan_join_groups;
+    property CanReadAllGroupMessages: Boolean read FCan_read_all_group_messages write FCan_read_all_group_messages;
+    property SupportsInlineQueries: Boolean read FSupports_inline_queries write FSupports_inline_queries;
   end;
 
   TtgChat = class(TtgObject)
@@ -55,6 +63,17 @@ type
     property Title: string read FTitle;
   end;
 
+  TtgMessageEntity = class(TtgObject)
+  private
+    FLength: int64;
+    FType: string;
+    FOffset: int64;
+  public
+    property Length: int64 read FLength;
+    property Offset: int64 write FOffset;
+    property &Type: string read FType;
+  end;
+
   TtgMessage = class(TtgObject)
   private
     [JsonReflectAttribute(ctString, rtString, TUnixDateTimeInterceptor)]
@@ -63,12 +82,22 @@ type
     FFrom: TtgUser;
     FChat: TtgChat;
     FText: string;
+    FEntities: TArray<TtgMessageEntity>;
+    FReply_to_message: TtgMessage;
+    FNew_chat_participant: TtgUser;
+    FNew_chat_member: TtgUser;
+    FNew_chat_members: TArray<TtgUser>;
   public
     property MessageId: Int64 read FMessage_id;
     property From: TtgUser read FFrom;
     property Chat: TtgChat read FChat;
     property Date: TDateTime read FDate;
     property Text: string read FText;
+    property Entities: TArray<TtgMessageEntity> read FEntities;
+    property ReplyToMessage: TtgMessage read FReply_to_message;
+    property NewChatMember: TtgUser read FNew_chat_member;
+    property NewChatMembers: TArray<TtgUser> read FNew_chat_members;
+    property NewChatParticipant: TtgUser read FNew_chat_participant;
     destructor Destroy; override;
   end;
 
@@ -106,36 +135,31 @@ type
     property Offset: int64 read FOffset write FOffset;
   end;
 
-  TtgUpdateMessage = class(TtgObject)
+  TtgCallbackQuery = class(TtgObject)
   private
-    [JsonReflectAttribute(ctString, rtString, TUnixDateTimeInterceptor)]
-    FDate: TDateTime;
-    FNew_chat_members: TArray<TtgUser>;
-    FNew_chat_participant: TtgUser;
-    FNew_chat_member: TtgUser;
-    Fmessage_id: int64;
+    FMessage: TtgMessage;
     FFrom: TtgUser;
-    FChat: TtgChat;
-    FText: string;
+    FChat_instance: int64;
+    FData: string;
+    FId: int64;
   public
-    property Chat: TtgChat read FChat;
-    property Date: TDateTime read FDate;
+    property Message: TtgMessage read FMessage;
     property From: TtgUser read FFrom;
-    property MessageId: int64 read Fmessage_id;
-    property Text: string read FText;
-    property NewChatMember: TtgUser read FNew_chat_member;
-    property NewChatMembers: TArray<TtgUser> read FNew_chat_members;
-    property NewChatParticipant: TtgUser read FNew_chat_participant;
+    property ChatInstance: int64 read FChat_instance;
+    property Data: string read FData;
+    property Id: int64 read FId;
     destructor Destroy; override;
   end;
 
   TtgUpdate = class(TtgObject)
   private
-    FMessage: TtgUpdateMessage;
+    FMessage: TtgMessage;
     FUpdate_id: int64;
+    FCallback_query: TtgCallbackQuery;
   public
-    property Message: TtgUpdateMessage read FMessage;
+    property Message: TtgMessage read FMessage;
     property UpdateId: int64 read FUpdate_id;
+    property CallbackQuery: TtgCallbackQuery read FCallback_query;
     destructor Destroy; override;
   end;
 
@@ -153,6 +177,30 @@ type
     destructor Destroy; override;
   end;
 
+  TInlineKeysArray = array of array of array of string;
+
+  TtgInlineKeyboardMarkup = class
+  private
+    FJSON: TJSONObject;
+  public
+    constructor Create; overload;
+    constructor Create(Keys: TInlineKeysArray); overload;
+    destructor Destroy; override;
+    function ToString: string; override;
+  end;
+
+  TKeysArray = array of array of string;
+
+  TtgReplyKeyboardMarkup = class
+  private
+    FJSON: TJSONObject;
+  public
+    constructor Create; overload;
+    constructor Create(Keys: TKeysArray); overload;
+    destructor Destroy; override;
+    function ToString: string; override;
+  end;
+
   TtgClient = class
   public
     class var
@@ -166,7 +214,9 @@ type
     class function Get(const Method, Json: string): Boolean; overload;
   public
     //
-    class procedure SendMessageToChat(ChatId: Int64; const Text: string); static;
+    class procedure SendMessageToChat(ChatId: Int64; const Text: string; const KeyBoard: string = ''); static;
+    class procedure SendPhotoToChat(ChatId: Int64; const Caption, FileName: string; Stream: TStream); overload; static;
+    class procedure SendPhotoToChat(ChatId: Int64; const Caption, FileName: string); overload; static;
     class function GetUpdates(out Value: TtgUpdates): Boolean;
     class function GetMe(out Value: TtgUserResponse): Boolean; static;
   end;
@@ -174,7 +224,7 @@ type
 implementation
 
 uses
-  HGm.ArrayHelper;
+  HGm.ArrayHelper, System.NetEncoding;
 
 { TtgClient }
 
@@ -183,17 +233,43 @@ begin
   Result := Get(Value, 'getMe') and Assigned(Value);
 end;
 
-class procedure TtgClient.SendMessageToChat(ChatId: Int64; const Text: string);
+class procedure TtgClient.SendMessageToChat(ChatId: Int64; const Text, KeyBoard: string);
 begin
   var Message := TtgMessageNew.Create;
   try
     Message.ChatId := ChatId;
     Message.Text := Text;
+    if not KeyBoard.IsEmpty then
+      Message.ReplyMarkup := KeyBoard;
     var Resp: TtgMessageResponse := nil;
     if Get(Resp, 'sendMessage', Message.ToString) and Assigned(Resp) then
       Resp.Free;
   finally
     Message.Free;
+  end;
+end;
+
+class procedure TtgClient.SendPhotoToChat(ChatId: Int64; const Caption, FileName: string);
+begin
+  var Photo := TFileStream.Create(FileName, fmShareDenyWrite);
+  try
+    TtgClient.SendPhotoToChat(ChatId, Caption, FileName, Photo);
+  finally
+    Photo.Free;
+  end;
+end;
+
+class procedure TtgClient.SendPhotoToChat(ChatId: Int64; const Caption, FileName: string; Stream: TStream);
+var
+  Resp: TStringStream;
+begin
+  Resp := TStringStream.Create;
+  try
+    Stream.Position := 0;
+    TDownload.PostFile(Format(BuildUrl('sendPhoto') + '?chat_id=%d&caption=%s',
+      [ChatId, TURLEncoding.URL.Encode(Caption)]), ['photo'], [ExtractFileName(FileName)], [Stream], Resp);
+  finally
+    Resp.Free
   end;
 end;
 
@@ -214,6 +290,7 @@ begin
   var Response: string;
   TDownload.PostJson(BuildUrl(Method), Json, Response);
   try
+    writeln(Response);
     Value := TJSON.JsonToObject<T>(Response);
     Result := Assigned(Value);
   except
@@ -247,7 +324,7 @@ end;
 
 function TtgObject.ToString: string;
 begin
-  Result := TJSON.ObjectToJsonString(Self);
+  Result := TJSON.ObjectToJsonString(Self, [joIgnoreEmptyStrings, joIgnoreEmptyArrays]);
 end;
 
 { TtgMessage }
@@ -258,6 +335,14 @@ begin
     Ffrom.Free;
   if Assigned(Fchat) then
     Fchat.Free;
+  if Assigned(FReply_to_message) then
+    FReply_to_message.Free;
+  if Assigned(Fnew_chat_member) then
+    Fnew_chat_member.Free;
+  TArrayHelp.FreeArrayOfObject<TtgUser>(Fnew_chat_members);
+  if Assigned(Fnew_chat_participant) then
+    Fnew_chat_participant.Free;
+  TArrayHelp.FreeArrayOfObject<TtgMessageEntity>(FEntities);
   inherited;
 end;
 
@@ -276,22 +361,8 @@ destructor TtgUpdate.Destroy;
 begin
   if Assigned(Fmessage) then
     Fmessage.Free;
-  inherited;
-end;
-
-{ TtgUpdateMessage }
-
-destructor TtgUpdateMessage.Destroy;
-begin
-  if Assigned(Ffrom) then
-    Ffrom.Free;
-  if Assigned(Fchat) then
-    Fchat.Free;
-  if Assigned(Fnew_chat_member) then
-    Fnew_chat_member.Free;
-  TArrayHelp.FreeArrayOfObject<TtgUser>(Fnew_chat_members);
-  if Assigned(Fnew_chat_participant) then
-    Fnew_chat_participant.Free;
+  if Assigned(FCallback_query) then
+    FCallback_query.Free;
   inherited;
 end;
 
@@ -301,6 +372,92 @@ destructor TtgUpdates.Destroy;
 begin
   if Assigned(result) then
     TArrayHelp.FreeArrayOfObject<TtgUpdate>(Fresult);
+end;
+
+{ TtgInlineKeyboardMarkup }
+
+constructor TtgInlineKeyboardMarkup.Create(Keys: TInlineKeysArray);
+begin
+  Create;
+  var KB := TJSONArray.Create;
+  FJSON.AddPair('inline_keyboard', KB);
+  for var Row in Keys do
+  begin
+    var JSRow := TJSONArray.Create;
+    KB.Add(JSRow);
+    for var Button in Row do
+    begin
+      var JSButton := TJSONObject.Create;
+      JSButton.AddPair('text', Button[0]);
+      JSButton.AddPair('callback_data', Button[1]);
+      JSRow.Add(JSButton);
+    end;
+  end;
+end;
+
+constructor TtgInlineKeyboardMarkup.Create;
+begin
+  inherited;
+  FJSON := TJSONObject.Create;
+end;
+
+destructor TtgInlineKeyboardMarkup.Destroy;
+begin
+  FJSON.Free;
+  inherited;
+end;
+
+function TtgInlineKeyboardMarkup.ToString: string;
+begin
+  Result := FJSON.ToJSON;
+end;
+
+{ TtgReplyKeyboardMarkup }
+
+constructor TtgReplyKeyboardMarkup.Create;
+begin
+  inherited;
+  FJSON := TJSONObject.Create;
+end;
+
+constructor TtgReplyKeyboardMarkup.Create(Keys: TKeysArray);
+begin
+  Create;
+  var KB := TJSONArray.Create;
+  FJSON.AddPair('keyboard', KB);
+  for var Row in Keys do
+  begin
+    var JSRow := TJSONArray.Create;
+    KB.Add(JSRow);
+    for var Button in Row do
+    begin
+      var JSButton := TJSONObject.Create;
+      JSButton.AddPair('text', Button);
+      JSRow.Add(JSButton);
+    end;
+  end;
+end;
+
+destructor TtgReplyKeyboardMarkup.Destroy;
+begin
+  FJSON.Free;
+  inherited;
+end;
+
+function TtgReplyKeyboardMarkup.ToString: string;
+begin
+  Result := FJSON.ToJSON;
+end;
+
+{ TtgCallbackQuery }
+
+destructor TtgCallbackQuery.Destroy;
+begin
+  if Assigned(Ffrom) then
+    Ffrom.Free;
+  if Assigned(FMessage) then
+    FMessage.Free;
+  inherited;
 end;
 
 end.
