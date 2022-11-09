@@ -6,6 +6,8 @@ uses
   System.SysUtils, System.Classes, System.Json, REST.Json, System.Net.HttpClient,
   REST.JsonReflect, REST.Json.Interceptors, HGM.Common.Download, HGM.JSONParams;
 
+{$SCOPEDENUMS ON}
+
 type
   TtgObject = class
     constructor Create; virtual;
@@ -80,6 +82,7 @@ type
     FFile_id: string;
     FFile_size: Int64;
     FFile_unique_id: string;
+    FFile_path: string;
   public
     property FileId: string read FFile_id write FFile_id;
     /// <summary>
@@ -87,6 +90,10 @@ type
     /// </summary>
     property FileSize: Int64 read FFile_size write FFile_size;
     property FileUniqueId: string read FFile_unique_id write FFile_unique_id;
+    /// <summary>
+    /// Путь к файлу для его загрузки. Не пустой только после вызова getFile
+    /// </summary>
+    property FilePath: string read FFile_path write FFile_path;
   end;
 
   TtgPhoto = class(TtgFile)
@@ -265,9 +272,11 @@ type
     FLeft_chat_member: TTgUser;
     FLeft_chat_participant: TtgUser;
     FLocation: TtgLocation;
+    FDocument: TtgDocument;
   public
     property Animation: TtgAnimation read FAnimation;
     property Caption: string read FCaption;
+    property Document: TtgDocument read FDocument;
     property Chat: TtgChat read FChat;
     property Date: TDateTime read FDate;
     property EditDate: TDateTime read FEdit_date;
@@ -327,6 +336,15 @@ type
   TtgUserResponse = TtgResponse<TtgUser>;
 
   TtgMessageResponse = TtgResponse<TtgMessage>;
+
+  TtgGetFile = class(TtgObject)
+  private
+    FFile_id: string;
+  public
+    property FileId: string read FFile_id write FFile_id;
+  end;
+
+  TtgGetFileResponse = class(TtgResponse<TtgFile>);
 
   TtgUpdateNew = class(TtgObject)
   private
@@ -401,6 +419,28 @@ type
   TtgParamsHistory = class(TJSONParam)
   end;
 
+  TtgPollType = (Regular, Quiz);
+
+  TtgPollTypeHelper = record helper for TtgPollType
+    function ToString: string;
+  end;
+
+  TtgPollParams = class(TJSONParam)
+    function ChatId(const Value: string): TtgPollParams; overload;
+    function ChatId(const Value: Int64): TtgPollParams; overload;
+    function Question(const Value: string): TtgPollParams;
+    function Options(const Value: TArray<string>): TtgPollParams;
+    function IsNotAnonymous(const Value: Boolean = True): TtgPollParams;
+    function &Type(const Value: TtgPollType): TtgPollParams;
+    function OpenPeriod(const Value: Word): TtgPollParams; overload;
+  end;
+
+  TtgAudioParams = class(TJSONParam)
+    function ChatId(const Value: string): TtgAudioParams; overload;
+    function ChatId(const Value: Int64): TtgAudioParams; overload;
+    function Audio(const Url: string): TtgAudioParams; overload;
+  end;
+
   TtgClient = class
   private
     FBaseUrl: string;
@@ -409,16 +449,20 @@ type
   public
     constructor Create(const AToken: string);
     function BuildUrl(const Method: string): string;
+    function BuildDownloadFileUrl(const FilePath: string): string;
     function Get(const Method, Json: string): Boolean; overload;
+    function Get(const Method, Json: string; Stream: TStream): Boolean; overload;
     function Get<T: class, constructor>(out Value: T; const Method: string; const Json: string = ''): Boolean; overload;
     function GetMe(out Value: TtgUserResponse): Boolean;
     function GetUpdates(out Value: TtgUpdates): Boolean; overload;
+    function GetFile(const FileId: string; Stream: TStream): Boolean;
     function Polling(Proc: TtgUpdateProc): Boolean; overload;
     procedure Hello;
-    function GetHistory(out Items: TArray<TtgMessage>; Params: TtgParamsHistory): Boolean;
     procedure SendMessageToChat(ChatId: Int64; const Text: string; const KeyBoard: string = '');
     procedure SendPhotoToChat(ChatId: Int64; const Caption, FileName: string); overload;
     procedure SendPhotoToChat(ChatId: Int64; const Caption, FileName: string; Stream: TStream); overload;
+    procedure SendPoll(Params: TtgPollParams; var Message: TtgMessage);
+    procedure SendAudio(Params: TtgAudioParams; var Message: TtgMessage);
     property BaseUrl: string read FBaseUrl write FBaseUrl;
     property LastUpdateId: Int64 read FLastUpdateId write FLastUpdateId;
     property Token: string read FToken write FToken;
@@ -447,7 +491,14 @@ end;
 
 function TtgClient.GetMe(out Value: TtgUserResponse): Boolean;
 begin
-  Result := Get(Value, 'getMe') and Assigned(Value);
+  Result := Get(Value, 'getMe');
+end;
+
+procedure TtgClient.SendAudio(Params: TtgAudioParams; var Message: TtgMessage);
+begin
+  var Resp: TtgMessageResponse := nil;
+  if Get(Resp, 'sendAudio', Params.ToJsonString) then
+    Resp.Free;
 end;
 
 procedure TtgClient.SendMessageToChat(ChatId: Int64; const Text, KeyBoard: string);
@@ -459,7 +510,7 @@ begin
     if not KeyBoard.IsEmpty then
       Message.ReplyMarkup := KeyBoard;
     var Resp: TtgMessageResponse := nil;
-    if Get(Resp, 'sendMessage', Message.ToString) and Assigned(Resp) then
+    if Get(Resp, 'sendMessage', Message.ToString) then
       Resp.Free;
   finally
     Message.Free;
@@ -490,15 +541,27 @@ begin
   end;
 end;
 
+procedure TtgClient.SendPoll(Params: TtgPollParams; var Message: TtgMessage);
+begin
+  var Resp: TtgMessageResponse := nil;
+  if Get(Resp, 'sendPoll', Params.ToJsonString) then
+    Resp.Free;
+end;
+
+function TtgClient.BuildDownloadFileUrl(const FilePath: string): string;
+begin
+  Result := Format('%s/file/bot%s/%s', [FBaseUrl, FToken, FilePath]);
+end;
+
 function TtgClient.BuildUrl(const Method: string): string;
 begin
-  Result := Format('%s%s/%s', [FBaseUrl, FToken, Method]);
+  Result := Format('%s/bot%s/%s', [FBaseUrl, FToken, Method]);
 end;
 
 constructor TtgClient.Create(const AToken: string);
 begin
   inherited Create;
-  FBaseUrl := 'https://api.telegram.org/bot';
+  FBaseUrl := 'https://api.telegram.org';
   FToken := AToken;
 end;
 
@@ -508,13 +571,18 @@ begin
   Result := TDownload.PostJson(BuildUrl(Method), Json, Response);
 end;
 
+function TtgClient.Get(const Method, Json: string; Stream: TStream): Boolean;
+begin
+  Result := TDownload.PostJson(BuildUrl(Method), Json, Stream);
+end;
+
 function TtgClient.Get<T>(out Value: T; const Method, Json: string): Boolean;
 begin
   Value := nil;
   var Response: string;
   TDownload.PostJson(BuildUrl(Method), Json, Response);
   try
-    //writeln(Response);
+    writeln(Response);
     Value := TJSON.JsonToObject<T>(Response);
     Result := Assigned(Value);
   except
@@ -522,20 +590,22 @@ begin
   end;
 end;
 
-type
-  TMsg = TArray<TtgMessage>;
-
-function TtgClient.GetHistory(out Items: TArray<TtgMessage>; Params: TtgParamsHistory): Boolean;
+function TtgClient.GetFile(const FileId: string; Stream: TStream): Boolean;
+var
+  Value: TtgGetFileResponse;
 begin
-  Items := [];
-  var Response: string;
-  TDownload.PostJson(BuildUrl('messages.getHistory'), Params.ToJsonString, Response);
+  Result := False;
+  var Params := TtgGetFile.Create;
   try
-    writeln(Response);
-    //Items := TJSON.JsonToObject<TMsg>(Response);
-    Result := True;
-  except
-    Result := False;
+    Params.FileId := FileId;
+    if Get(Value, 'getFile', Params.ToString) then
+    try
+      Result := TDownload.Get(BuildDownloadFileUrl(Value.Result.FilePath), Stream);
+    finally
+      Value.Free;
+    end;
+  finally
+    Params.Free;
   end;
 end;
 
@@ -545,7 +615,7 @@ begin
   var Params := TtgUpdateNew.Create;
   try
     Params.Offset := FLastUpdateId;
-    if Get(Value, 'getUpdates', Params.ToString) and Assigned(Value) then
+    if Get(Value, 'getUpdates', Params.ToString) then
     begin
       Result := True;
       if Value.Ok and (Length(Value.Result) > 0) then
@@ -591,6 +661,8 @@ begin
     Ffrom.Free;
   if Assigned(FLocation) then
     FLocation.Free;
+  if Assigned(FDocument) then
+    FDocument.Free;
   if Assigned(FLeft_chat_participant) then
     FLeft_chat_participant.Free;
   if Assigned(FLeft_chat_member) then
@@ -777,6 +849,84 @@ begin
   if Assigned(FThumb) then
     FThumb.Free;
   inherited;
+end;
+
+{ TtgPollParams }
+
+function TtgPollParams.&Type(const Value: TtgPollType): TtgPollParams;
+begin
+  Result := Self;
+  Add('type', Value.ToString);
+end;
+
+function TtgPollParams.ChatId(const Value: string): TtgPollParams;
+begin
+  Result := Self;
+  Add('chat_id', Value);
+end;
+
+function TtgPollParams.ChatId(const Value: Int64): TtgPollParams;
+begin
+  Result := Self;
+  Add('chat_id', Value);
+end;
+
+function TtgPollParams.IsNotAnonymous(const Value: Boolean): TtgPollParams;
+begin
+  Result := Self;
+  Add('is_anonymous', not Value);
+end;
+
+function TtgPollParams.OpenPeriod(const Value: Word): TtgPollParams;
+begin
+  Result := Self;
+  Add('open_period', Value);
+end;
+
+function TtgPollParams.Options(const Value: TArray<string>): TtgPollParams;
+begin
+  Result := Self;
+  Add('options', Value);
+end;
+
+function TtgPollParams.Question(const Value: string): TtgPollParams;
+begin
+  Result := Self;
+  Add('question', Value);
+end;
+
+{ TtgPollTypeHelper }
+
+function TtgPollTypeHelper.ToString: string;
+begin
+  case Self of
+    TtgPollType.Regular:
+      Result := 'regular';
+    TtgPollType.Quiz:
+      Result := 'quiz';
+  else
+    Result := 'regular';
+  end;
+end;
+
+{ TtgAudioParams }
+
+function TtgAudioParams.Audio(const Url: string): TtgAudioParams;
+begin
+  Result := Self;
+  Add('audio', Url);
+end;
+
+function TtgAudioParams.ChatId(const Value: string): TtgAudioParams;
+begin
+  Result := Self;
+  Add('chat_id', Value);
+end;
+
+function TtgAudioParams.ChatId(const Value: Int64): TtgAudioParams;
+begin
+  Result := Self;
+  Add('chat_id', Value);
 end;
 
 end.
